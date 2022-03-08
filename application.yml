@@ -1,0 +1,186 @@
+proxy:
+    container-wait-time: 90000 #1.5 minutes 
+    #logo-url: file://localhost/srv/shiny-server/edai/www/logo_white_text.png # how do I get my image file into shinyproxy container?
+    title: "jeffco analytics"
+    port: 8080
+    authentication: openid
+    openid:
+        auth-url: https://login.microsoftonline.com/@@TENANT@@/oauth2/authorize
+        token-url: https://login.microsoftonline.com/@@TENANT@@/oauth2/token
+        jwks-url: https://login.microsoftonline.com/common/discovery/keys
+        client-id: "@@CLIENT-ID@@"
+        client-secret: "@@CLIENT-SECRET@@"
+        logout-url: https://login.windows.net/common/oauth2/logout?returnTo=https://@@APP-URL@@/  # https://YOUR_AUTH0_DOMAIN/v2/logout?returnTo=http%3A%2F%2Fwww.yourshinyproxyserver.com
+    container-backend: kubernetes
+    kubernetes:
+      internal-networking: true
+      url: http://localhost:8001
+      image-pull-policy: Always
+      image-pull-secret: jatest-regcred
+      # debug-patches: true
+    specs:
+    - id: 01_hello
+      display-name: Hello Application
+      description: Application which demonstrates the basics of a Shiny app
+      container-cmd: ["R", "-e", "shinyproxy::run_01_hello()"]
+      container-image: openanalytics/shinyproxy-demo
+    - id: edAI_app
+      display-name: Jeffco Analytics
+      description: Live analytics for Jeffco
+      container-cmd: ["R", "-e", "shiny::runApp('/srv/shiny-server/edai/')"] # this already exists in the docker container.
+      container-image: "@@ACR-NAME@@.azurecr.io/edai:nodata"
+      container-memory-request: 4Gi
+      container-cpu-request: 1
+      container-memory-limit: 8Gi
+      container-cpu-limit: 1
+      kubernetes-pod-patches: | # (see https://shinyproxy.io/documentation/configuration/#apps for original examples and http://jsonpatch.com/ for how they work)
+        - op: add
+          path: /spec/nodeSelector
+          value: 
+            - kubernetes.io/role: agent 
+              kubernetes.io/os: linux
+        - op: add
+          path: /spec/affinity/nodeAffinity
+          value: 
+            preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                - key: type
+                  operator: In
+                  values:
+                  - virtual-kubelet
+        - op: add
+          path: /spec/tolerations
+          value: 
+          - key: virtual-kubelet.io/provider
+            operator: Exists
+        - op: add
+          path: /spec/volumes
+          value:
+            - name: pv-afs
+              azureFile:
+                secretName: azfile-storekey # "@@AZFILE-STORE-KEY@@" 
+                shareName: @@DATA-SHARE-NAME@@
+                readOnly: false
+        - op: add
+          path: /spec/containers/0/volumeMounts
+          value:
+            - mountPath: /srv/shiny-server/edai/data/
+              name: pv-afs
+      kubernetes-additional-manifests:
+      # # (creating PersistentVolume from AFS patterned after https://docs.microsoft.com/en-us/azure/aks/azure-files-volume  ::: and ::: https://docs.openshift.com/container-platform/4.6/storage/persistent_storage/persistent-storage-azure-file.html)
+      # # (generate  volume secret with $ kubectl create secret generic azure-secret --from-literal=azurestorageaccountname=$AKS_PERS_STORAGE_ACCOUNT_NAME --from-literal=azurestorageaccountkey=$STORAGE_KEY
+        - |
+          apiVersion: v1 
+          kind: PersistentVolume 
+          metadata: 
+            name: pv-afs
+          spec:
+            capacity:
+              storage: 10Gi
+            accessModes:
+              - ReadWriteMany 
+            storageClassName: azurefile
+            azureFile:
+              secretName: azfile-storekey # "@@AZFILE-STORE-KEY@@" # 
+              shareName: @@DATA-SHARE-NAME@@ 
+              readOnly: false
+        # - |
+        #   apiVersion: v1
+        #   kind: PersistentVolumeClaim
+        #   metadata:
+        #     name: pvc-afs
+        #   spec:
+        #     storageClassName: azurefile
+        #     volumeName: pv-afs
+        #     accessModes:
+        #       - ReadWriteMany 
+        #     resources:
+        #       requests:
+        #         storage: 10Gi
+    - id: survey_app
+      display-name: Columbine survey
+      description: Tiny test app
+      container-cmd: ["R", "-e", "shiny::runApp('/srv/shiny-server/edai/survey/')"] # this already exists in the docker container.
+      container-image: "@@ACR-NAME@@.azurecr.io/edai:nodata"
+    - id: testapp
+      display-name: Test app
+      description: Tiny test app - fst on-disc
+      container-cmd: ["R", "-e", "shiny::runApp('/srv/shiny-server/edai/app_testfst.R')"] 
+      container-image: "@@ACR-NAME@@.azurecr.io/edai:nodata"
+      kubernetes-pod-patches: | # (see https://shinyproxy.io/documentation/configuration/#apps for original examples and http://jsonpatch.com/ for how they work)
+        - op: add
+          path: /spec/volumes
+          value:
+            - name: pv-afs
+              azureFile:
+                secretName: azfile-storekey # "@@AZFILE-STORE-KEY@@" 
+                shareName: @@DATA-SHARE-NAME@@
+                readOnly: false
+        - op: add
+          path: /spec/containers/0/volumeMounts
+          value:
+            - mountPath: /srv/shiny-server/edai/data/
+              name: pv-afs
+      kubernetes-additional-manifests:
+      # # (creating PersistentVolume from AFS patterned after https://docs.microsoft.com/en-us/azure/aks/azure-files-volume  ::: and ::: https://docs.openshift.com/container-platform/4.6/storage/persistent_storage/persistent-storage-azure-file.html)
+      # # (generate  volume secret with $ kubectl create secret generic azure-secret --from-literal=azurestorageaccountname=$AKS_PERS_STORAGE_ACCOUNT_NAME --from-literal=azurestorageaccountkey=$STORAGE_KEY
+        - |
+          apiVersion: v1 
+          kind: PersistentVolume 
+          metadata: 
+            name: pv-afs
+          spec:
+            capacity:
+              storage: 10Gi
+            accessModes:
+              - ReadWriteMany 
+            storageClassName: azurefile
+            azureFile:
+              secretName: azfile-storekey # "@@AZFILE-STORE-KEY@@" # 
+              shareName: @@DATA-SHARE-NAME@@ 
+              readOnly: false
+    # - id: survey_monitor
+    #   display-name: MYVH survey moniotr
+    #   description: Test permissioning app
+    #   container-cmd: ["R", "-e", "shiny::runApp('/srv/shiny-server/edai/surveyMonitor_app/')"] # this already exists in the docker container.
+    #   container-image: "@@ACR-NAME@@.azurecr.io/edai:nodata"
+    #   kubernetes-pod-patches: | # (see https://shinyproxy.io/documentation/configuration/#apps for original examples and http://jsonpatch.com/ for how they work)
+    #     - op: add
+    #       path: /spec/volumes
+    #       value:
+    #         - name: pv-afs  ## change name to be different from the one above????
+    #           azureFile:
+    #             secretName: azfile-storekey #azure-secret 
+    #             shareName: jadatashare
+    #             readOnly: false
+    #     - op: add
+    #       path: /spec/containers/0/volumeMounts
+    #       value:
+    #         - mountPath: /srv/shiny-server/edai/surveyMonitor_app/data/
+    #           name: pv-afs
+    #   kubernetes-additional-manifests:
+    #   # # (creating PersistentVolume from AFS patterned after https://docs.microsoft.com/en-us/azure/aks/azure-files-volume  ::: and ::: https://docs.openshift.com/container-platform/4.6/storage/persistent_storage/persistent-storage-azure-file.html)
+    #   # # (generate  volume secret with $ kubectl create secret generic azure-secret --from-literal=azurestorageaccountname=$AKS_PERS_STORAGE_ACCOUNT_NAME --from-literal=azurestorageaccountkey=$STORAGE_KEY
+    #     - |
+    #       apiVersion: v1 
+    #       kind: PersistentVolume 
+    #       metadata: 
+    #         name: pv-afs  ## change name to be different from the one above????
+    #       spec:
+    #         capacity:
+    #           storage: 10Gi
+    #         accessModes:
+    #           - ReadWriteMany 
+    #         storageClassName: azurefile
+    #         azureFile:
+    #           secretName: azfile-storekey # azure-secret # 
+    #           shareName: jadatashare
+    #           readOnly: false
+# logging:
+#     file:
+#         shinyproxy.log
+server:
+    useForwardHeaders: true
+    container-protocol: http
